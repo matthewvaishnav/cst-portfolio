@@ -1,0 +1,281 @@
+---
+# ══════════════════════════════════════════════════════════════════════════════
+# Ansible Playbook — Secure Web Server Configuration
+# ══════════════════════════════════════════════════════════════════════════════
+# Author : Matthew Vaishnav — CST, Conestoga College
+#
+# Provisions and hardens an Ubuntu 22.04 web server:
+#   - System updates & essential packages
+#   - UFW firewall configuration
+#   - Nginx install + TLS hardening
+#   - Fail2ban setup
+#   - auditd logging
+#   - Non-root deploy user
+#
+# Usage:
+#   ansible-playbook -i inventory.ini site.yml
+#   ansible-playbook -i inventory.ini site.yml --tags "nginx,firewall"
+#   ansible-playbook -i inventory.ini site.yml --check
+# ══════════════════════════════════════════════════════════════════════════════
+
+- name: 🔐 Secure Web Server — Full Provision
+  hosts: webservers
+  become: true
+  vars:
+    deploy_user: deployer
+    deploy_user_shell: /bin/bash
+    nginx_ssl_protocols: "TLSv1.2 TLSv1.3"
+    nginx_ssl_ciphers: "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384"
+    allowed_ssh_users:
+      - "{{ deploy_user }}"
+    ufw_allowed_ports:
+      - { port: 22,  proto: tcp, comment: SSH }
+      - { port: 80,  proto: tcp, comment: HTTP }
+      - { port: 443, proto: tcp, comment: HTTPS }
+
+  handlers:
+    - name: restart nginx
+      service: name=nginx state=restarted
+
+    - name: reload nginx
+      service: name=nginx state=reloaded
+
+    - name: restart sshd
+      service: name=sshd state=restarted
+
+    - name: restart fail2ban
+      service: name=fail2ban state=restarted
+
+    - name: restart auditd
+      service: name=auditd state=restarted
+
+  tasks:
+
+    # ── System Updates ────────────────────────────────────────────────────────
+    - name: Update apt cache
+      apt:
+        update_cache: true
+        cache_valid_time: 3600
+      tags: [always, packages]
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: true
+      tags: [packages]
+
+    - name: Install essential packages
+      apt:
+        name:
+          - ufw
+          - fail2ban
+          - auditd
+          - audispd-plugins
+          - unattended-upgrades
+          - apt-listchanges
+          - curl
+          - wget
+          - git
+          - htop
+          - net-tools
+          - vim
+          - logwatch
+        state: present
+      tags: [packages]
+
+    - name: Enable automatic security updates
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Download-Upgradeable-Packages "1";
+          APT::Periodic::AutocleanInterval "7";
+          APT::Periodic::Unattended-Upgrade "1";
+      tags: [packages]
+
+    # ── Deploy User ───────────────────────────────────────────────────────────
+    - name: Create deploy user
+      user:
+        name: "{{ deploy_user }}"
+        shell: "{{ deploy_user_shell }}"
+        groups: sudo
+        append: true
+        create_home: true
+      tags: [users]
+
+    - name: Set up deploy user SSH directory
+      file:
+        path: "/home/{{ deploy_user }}/.ssh"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0700"
+      tags: [users]
+
+    - name: Lock root account
+      user:
+        name: root
+        password_lock: true
+      tags: [users, security]
+
+    # ── SSH Hardening ──────────────────────────────────────────────────────────
+    - name: Configure sshd
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#?{{ item.key }}"
+        line: "{{ item.key }} {{ item.value }}"
+        validate: /usr/sbin/sshd -t -f %s
+        backup: true
+      with_items:
+        - { key: PermitRootLogin,        value: "no" }
+        - { key: PasswordAuthentication, value: "no" }
+        - { key: PermitEmptyPasswords,   value: "no" }
+        - { key: X11Forwarding,          value: "no" }
+        - { key: MaxAuthTries,           value: "3" }
+        - { key: LoginGraceTime,         value: "30" }
+        - { key: ClientAliveInterval,    value: "300" }
+        - { key: ClientAliveCountMax,    value: "2" }
+        - { key: AllowUsers,             value: "{{ allowed_ssh_users | join(' ') }}" }
+      notify: restart sshd
+      tags: [ssh, security]
+
+    # ── Firewall (UFW) ─────────────────────────────────────────────────────────
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      with_items:
+        - { direction: incoming, policy: deny }
+        - { direction: outgoing, policy: allow }
+      tags: [firewall]
+
+    - name: Allow required ports
+      ufw:
+        rule: allow
+        port: "{{ item.port }}"
+        proto: "{{ item.proto }}"
+        comment: "{{ item.comment }}"
+      with_items: "{{ ufw_allowed_ports }}"
+      tags: [firewall]
+
+    - name: Rate-limit SSH
+      ufw:
+        rule: limit
+        port: 22
+        proto: tcp
+      tags: [firewall]
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+      tags: [firewall]
+
+    # ── Nginx ──────────────────────────────────────────────────────────────────
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+      tags: [nginx]
+
+    - name: Remove default Nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+      notify: reload nginx
+      tags: [nginx]
+
+    - name: Configure Nginx security headers
+      copy:
+        dest: /etc/nginx/conf.d/security-headers.conf
+        content: |
+          add_header X-Frame-Options "SAMEORIGIN" always;
+          add_header X-Content-Type-Options "nosniff" always;
+          add_header X-XSS-Protection "1; mode=block" always;
+          add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+          add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+          add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';" always;
+          server_tokens off;
+          ssl_protocols {{ nginx_ssl_protocols }};
+          ssl_ciphers {{ nginx_ssl_ciphers }};
+          ssl_prefer_server_ciphers on;
+          ssl_session_cache shared:SSL:10m;
+          ssl_session_timeout 10m;
+      notify: reload nginx
+      tags: [nginx, security]
+
+    - name: Start and enable Nginx
+      service:
+        name: nginx
+        state: started
+        enabled: true
+      tags: [nginx]
+
+    # ── Fail2Ban ───────────────────────────────────────────────────────────────
+    - name: Configure fail2ban
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [DEFAULT]
+          bantime  = 3600
+          findtime = 600
+          maxretry = 5
+          backend  = systemd
+
+          [sshd]
+          enabled = true
+          port    = ssh
+          logpath = %(sshd_log)s
+
+          [nginx-http-auth]
+          enabled = true
+
+          [nginx-botsearch]
+          enabled  = true
+          port     = http,https
+          logpath  = %(nginx_error_log)s
+          maxretry = 2
+      notify: restart fail2ban
+      tags: [fail2ban, security]
+
+    - name: Enable fail2ban
+      service:
+        name: fail2ban
+        state: started
+        enabled: true
+      tags: [fail2ban]
+
+    # ── Auditd ─────────────────────────────────────────────────────────────────
+    - name: Configure audit rules
+      copy:
+        dest: /etc/audit/rules.d/cst-hardening.rules
+        content: |
+          -w /etc/passwd -p wa -k identity
+          -w /etc/shadow -p wa -k identity
+          -w /etc/sudoers -p wa -k sudo
+          -w /etc/ssh/sshd_config -p wa -k sshd
+          -a always,exit -F arch=b64 -S execve -k exec
+          -a always,exit -F arch=b64 -S open -F exit=-EACCES -k access
+          -w /var/log/auth.log -p wa -k auth_log
+      notify: restart auditd
+      tags: [auditd, security]
+
+    - name: Enable auditd
+      service:
+        name: auditd
+        state: started
+        enabled: true
+      tags: [auditd]
+
+    # ── Verification ───────────────────────────────────────────────────────────
+    - name: Verify nginx is running
+      uri:
+        url: "http://localhost"
+        status_code: [200, 301, 302, 404]
+      register: nginx_check
+      changed_when: false
+      tags: [verify]
+
+    - name: Print verification result
+      debug:
+        msg: "✅ Nginx responding — Status: {{ nginx_check.status }}"
+      tags: [verify]
