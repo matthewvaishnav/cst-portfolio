@@ -1,0 +1,269 @@
+### `devops/ci-cd/ci-cd.yml`
+
+```yaml
+name: 🚀 CI/CD — Build, Scan & Deploy
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"
+  DOCKER_IMAGE: ${{ github.repository_owner }}/cst-app
+  REGISTRY: ghcr.io
+
+jobs:
+  # ── 1. Code Quality & Linting ───────────────────────────────────────────────
+  lint:
+    name: 🔍 Lint & Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install linting tools
+        run: |
+          pip install flake8 black isort mypy pylint
+
+      - name: Black formatting check
+        run: black --check --diff .
+
+      - name: isort import ordering
+        run: isort --check-only --diff .
+
+      - name: Flake8 lint
+        run: flake8 . --max-line-length=100 --exclude=.git,__pycache__
+
+      - name: Shell script lint (shellcheck)
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: "./scripting/bash"
+
+  # ── 2. Unit Tests ───────────────────────────────────────────────────────────
+  test:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: lint
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov pytest-mock
+
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=. --cov-report=xml --cov-report=term-missing
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+  # ── 3. Security — SAST ──────────────────────────────────────────────────────
+  sast:
+    name: 🔐 SAST — Static Security Analysis
+    runs-on: ubuntu-latest
+    needs: lint
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Bandit
+        run: pip install bandit[toml]
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r . \
+            -x ./.git,./tests,./venv \
+            -f json -o bandit_report.json \
+            --severity-level medium || true
+
+      - name: Display Bandit results
+        run: |
+          python3 -c "
+          import json, sys
+          with open('bandit_report.json') as f:
+            data = json.load(f)
+          issues = data.get('results', [])
+          highs = [i for i in issues if i['issue_severity'] == 'HIGH']
+          print(f'Total issues: {len(issues)} | HIGH: {len(highs)}')
+          for i in highs:
+            print(f'  🔴 {i[\"issue_text\"]} — {i[\"filename\"]}:{i[\"line_number\"]}')
+          if highs:
+            sys.exit(1)
+          "
+
+      - name: Run Semgrep SAST
+        uses: semgrep/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/python
+            p/owasp-top-ten
+        continue-on-error: true
+
+  # ── 4. Dependency Vulnerability Scan ────────────────────────────────────────
+  dependency-scan:
+    name: 📦 Dependency Vulnerability Scan
+    runs-on: ubuntu-latest
+    needs: lint
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit dependencies
+        run: |
+          pip-audit --requirement requirements.txt \
+            --format json --output pip_audit.json || true
+          pip-audit --requirement requirements.txt || true
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy_fs.sarif
+
+  # ── 5. Docker Build & Scan ──────────────────────────────────────────────────
+  docker:
+    name: 🐳 Docker Build & Image Scan
+    runs-on: ubuntu-latest
+    needs: [test, sast]
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.DOCKER_IMAGE }}
+          tags: |
+            type=sha,prefix=sha-
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Push image (main branch only)
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── 6. Terraform Validate ────────────────────────────────────────────────────
+  terraform-validate:
+    name: 🏗️ Terraform Validate
+    runs-on: ubuntu-latest
+    if: always()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "~1.6"
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive devops/terraform/
+
+      - name: Terraform Init
+        run: |
+          cd devops/terraform
+          terraform init -backend=false
+
+      - name: Terraform Validate
+        run: |
+          cd devops/terraform
+          terraform validate
+
+      - name: TFSec — Terraform Security Scanner
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          working_directory: devops/terraform
+          soft_fail: true
+
+  # ── 7. Notify on Failure ────────────────────────────────────────────────────
+  notify:
+    name: 📣 Notify
+    runs-on: ubuntu-latest
+    needs: [lint, test, sast, docker]
+    if: failure()
+
+    steps:
+      - name: Create failure summary
+        run: |
+          echo "## ❌ Pipeline Failed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Lint | ${{ needs.lint.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SAST | ${{ needs.sast.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Docker | ${{ needs.docker.result }} |" >> $GITHUB_STEP_SUMMARY
+```
+
+Let me know when it's in!
