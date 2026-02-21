@@ -45,8 +45,4 @@
 |------|--------|
 | `01-exchange-and-email-protocols.md` | SMTP/POP3/IMAP/MAPI, Exchange Server, mailbox types, DAG, MDM, M365 |
 
----
 
-## 🗂 GitHub Upload Path
-
-Upload these files to: `docs/class-notes/` in your portfolio repo.
