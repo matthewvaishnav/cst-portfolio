@@ -2,7 +2,7 @@
 
 > **Conestoga College — Computer Systems Technician**  
 > Actively seeking Co-op placement | Targeting: SOC Analyst · DevOps · Junior IT Analyst · Systems Admin  
-> 📍Kitchener/Waterloo Region, ON · 📧 fivepenguinz@proton.me · 🔗 [LinkedIn](https://www.linkedin.com/in/matthew-vaishnav-279670229/)
+> 📍Kitchener/Waterloo Region, ON · 📧 matthew.vaishnav@gmail.com · 🔗 [LinkedIn](https://www.linkedin.com/in/matthew-vaishnav-279670229/)
 
 ---
 
