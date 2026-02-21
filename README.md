@@ -65,7 +65,7 @@ Everything here is written, tested, and documented by me as part of my learning 
 
 ## 🚀 Featured Projects
 
-### 1. 🔍 [Automated Log Anomaly Detector](./soc/anomaly_detector.py)
+### 1. 🔍 [Automated Log Anomaly Detector](./soc/log-analysis/anomaly_detector.py)
 Python script that ingests Apache/Nginx access logs, identifies brute-force patterns, suspicious user agents, and geo-anomalies — outputs structured JSON alerts.
 
 ### 2. 🛡️ [Linux Server Hardening Automation](./scripting/bash/server_hardening.sh)
