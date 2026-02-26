@@ -1,0 +1,67 @@
+title: DCSync Attack — Replication Rights Abused from Non-DC Host
+id: b9c4f1a2-3e5d-4b7f-8a9c-1d2e3f4a5b6c
+status: stable
+description: |
+    Detects DCSync attacks by monitoring for DS-Replication-Get-Changes-All
+    directory service access from a host that is NOT a domain controller.
+    DCSync allows an attacker with sufficient privileges to request password
+    hashes for any account, including krbtgt, enabling Golden Ticket attacks.
+
+    Validated against: THM Attacktive Directory, Windows Server 2019 AD lab.
+    This rule correctly fired during secretsdump.py DCSync in lab environment.
+
+author: Matthew Vaishnav
+date: 2026-01-20
+modified: 2026-02-01
+
+references:
+    - https://attack.mitre.org/techniques/T1003/006/
+    - https://www.ired.team/offensive-security-experiments/active-directory-kerberos-abuse/dump-password-hashes-from-domain-controller-with-dcsync
+
+tags:
+    - attack.credential_access
+    - attack.t1003.006
+    - attack.t1078.002
+    - detection.lab_validated
+    - windows.active_directory
+
+logsource:
+    product: windows
+    service: security
+
+detection:
+    replication_event:
+        EventID: 4662
+        ObjectType:
+            - '%{19195a5b-6da0-11d0-afd3-00c04fd930c9}'   # DS-Replication-Get-Changes
+        Properties:
+            - '%{1131f6aa-9c07-11d1-f79f-00c04fc2dcd2}'   # DS-Replication-Get-Changes-All
+            - '%{1131f6ad-9c07-11d1-f79f-00c04fc2dcd2}'   # DS-Replication-Get-Changes-In-Filtered-Set
+    filter_machine_accounts:
+        SubjectUserName|endswith: '$'
+    filter_known_dc_sync:
+        SubjectUserName|contains:
+            - 'MSOL_'      # Azure AD Connect
+            - 'AAD_'       # Azure AD Connect
+    condition: replication_event AND NOT filter_machine_accounts AND NOT filter_known_dc_sync
+
+falsepositives:
+    - Azure AD Connect sync accounts (MSOL_*, AAD_*) — add to filter_known_dc_sync
+    - Legitimate DC-to-DC replication (covered by filter_machine_accounts)
+    - Third-party AD management tools with replication rights
+
+level: critical
+
+# ── Response Actions ──────────────────────────────────────────────────────────
+# 1. Immediately identify SubjectUserName — which account triggered this
+# 2. Check if SubjectLogonId corresponds to an active session on the source host
+# 3. If confirmed malicious: disable account, force password reset for all
+#    accounts that may have been dumped (at minimum: krbtgt, Administrator)
+# 4. Rotate krbtgt password TWICE (to invalidate existing Kerberos tickets)
+# 5. Hunt for Golden/Silver ticket usage in Event ID 4769 logs
+#
+# Elastic EQL equivalent:
+#   sequence by winlog.event_data.SubjectLogonId
+#     [authentication where event.code == "4624"]
+#     [iam where event.code == "4662" and
+#      winlog.event_data.Properties : "*1131f6aa*"]

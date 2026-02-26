@@ -1,0 +1,71 @@
+title: Sudo Privilege Escalation via Interpreter (Python/Perl/Ruby/Lua/Node)
+id: c7d8e9f0-1a2b-3c4d-5e6f-7a8b9c0d1e2f
+status: stable
+description: |
+    Detects privilege escalation via sudo abuse of scripting interpreters.
+    A common misconfiguration allows NOPASSWD sudo for Python, Perl, Ruby,
+    Lua, or Node — any of which can trivially spawn a root shell with one line.
+
+    This is GTFOBins class abuse (https://gtfobins.github.io/).
+    Observed in TryHackMe Linux PrivEsc Arena and real-world engagements.
+
+    Triggering pattern: low-privilege user runs interpreter via sudo, spawns
+    /bin/bash or /bin/sh as root.
+
+author: Matthew Vaishnav
+date: 2026-01-18
+modified: 2026-02-01
+
+references:
+    - https://attack.mitre.org/techniques/T1548/003/
+    - https://gtfobins.github.io/gtfobins/python/
+    - https://gtfobins.github.io/gtfobins/perl/
+
+tags:
+    - attack.privilege_escalation
+    - attack.t1548.003
+    - attack.t1059.004
+    - detection.lab_validated
+    - linux.sudo_abuse
+
+logsource:
+    product: linux
+    service: auth
+
+detection:
+    sudo_interpreter:
+        keywords:
+            - 'sudo python'
+            - 'sudo python3'
+            - 'sudo perl'
+            - 'sudo ruby'
+            - 'sudo lua'
+            - 'sudo node'
+    shell_spawn:
+        keywords:
+            - 'pty.spawn'
+            - 'os.system'
+            - 'subprocess.call'
+            - '/bin/bash'
+            - '/bin/sh'
+    condition: sudo_interpreter AND shell_spawn
+
+# Alternative detection — auditd based (higher fidelity)
+# -a always,exit -F arch=b64 -S execve -F euid=0 -F auid!=0
+# -F exe=/usr/bin/python3 -k sudo_python_escalation
+
+falsepositives:
+    - Legitimate automation scripts running as root via sudo (review sudo rules)
+    - Ansible/deployment automation using sudo python for system tasks
+    - DevOps pipelines with intentional elevated interpreter access
+
+level: high
+
+# ── Prevention ────────────────────────────────────────────────────────────────
+# Fix: Audit /etc/sudoers — remove ALL NOPASSWD entries for interpreters.
+# If interpreter sudo access is required, restrict to specific scripts:
+#   user ALL=(root) NOPASSWD: /usr/bin/python3 /opt/deploy/specific_script.py
+# Never grant: user ALL=(ALL) NOPASSWD: /usr/bin/python3
+#
+# Audit command:
+#   grep -E 'NOPASSWD.*(python|perl|ruby|lua|node|bash|sh)' /etc/sudoers
