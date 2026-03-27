@@ -30,6 +30,115 @@
     --sans: 'DM Sans', sans-serif;
     --display: 'Space Grotesk', sans-serif;
     --ease-out: cubic-bezier(.16,1,.3,1);
+    --transition-speed: 0.3s;
+  }
+  
+  /* Dark mode variables */
+  [data-theme="light"] {
+    --bg:          #f8f9fa;
+    --surface:     #ffffff;
+    --surface2:    #f0f0f0;
+    --surface3:    #e8e8e8;
+    --border:      rgba(0,0,0,0.08);
+    --border-hi:   rgba(0,0,0,0.15);
+    --accent:      #2563eb;
+    --accent2:     #d97706;
+    --accent3:     #059669;
+    --accent-dim:  rgba(37,99,235,0.2);
+    --accent-glow: rgba(37,99,235,0.08);
+    --text:        #374151;
+    --text-mid:    #6b7280;
+    --text-hi:     #111827;
+    --green:       #059669;
+    --amber:       #d97706;
+    --red:         #dc2626;
+  }
+  
+  /* Enhanced project hover effects */
+  .proj-row {
+    transition: all var(--transition-speed) var(--ease-out);
+  }
+  
+  .proj-row:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  }
+  
+  .proj-row::before {
+    transition: width var(--transition-speed) var(--ease-out);
+  }
+  
+  .proj-row:hover::before {
+    width: 6px;
+  }
+  
+  /* Enhanced skill bar animation */
+  .skill-bar-fill {
+    transition: width 1.5s cubic-bezier(.16,1,.3,1);
+    will-change: width;
+  }
+  
+  /* Impact metric enhancement */
+  .proj-metric {
+    font-family: var(--display);
+    font-size: 1.1rem;
+    transition: transform var(--transition-speed) var(--ease-out);
+  }
+  
+  .proj-row:hover .proj-metric {
+    transform: scale(1.05);
+  }
+  
+  /* Responsive spacing */
+  @media(min-width:1024px) {
+    section {
+      padding: 6rem 2.5rem;
+    }
+    
+    #hero {
+      padding: 6rem 2.5rem;
+    }
+  }
+  
+  /* Dark mode toggle button */
+  .theme-toggle {
+    position: fixed;
+    top: 1rem;
+    right: 1rem;
+    z-index: 1000;
+    width: 3rem;
+    height: 1.5rem;
+    background: var(--surface2);
+    border-radius: 1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    padding: 0.25rem;
+    transition: background var(--transition-speed);
+    border: 1px solid var(--border);
+  }
+  
+  .theme-toggle:hover {
+    background: var(--surface3);
+  }
+  
+  .theme-toggle::after {
+    content: '';
+    display: block;
+    width: 1rem;
+    height: 1rem;
+    background: var(--text-hi);
+    border-radius: 50%;
+    transition: transform var(--transition-speed);
+  }
+  
+  [data-theme="light"] .theme-toggle::after {
+    transform: translateX(100%);
+  }
+  
+  [data-theme="light"] .theme-toggle {
+    background: var(--surface);
+    border-color: var(--border-hi);
   }
 
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2110,8 +2219,10 @@
 <body>
 
 
-<!-- GRAIN OVERLAY -->
-<div id="grain"></div>
+  <!-- GRAIN OVERLAY -->
+  <div id="grain"></div>
+  <!-- DARK MODE TOGGLE -->
+  <button class="theme-toggle" aria-label="Toggle dark/light mode" title="Toggle theme"></button>
 
 <!-- SCROLL PROGRESS -->
 <div id="pg"></div>
@@ -4498,9 +4609,28 @@ function closeEgg() {
   });
   replayBtn.addEventListener('click', function() { activePhase = 0; renderPhase(); });
 
-  render();
-
-})();
+   render();
+   
+   // Dark mode toggle functionality
+   const themeToggle = document.querySelector('.theme-toggle');
+   if (themeToggle) {
+       // Check for saved theme preference or use system preference
+       const savedTheme = localStorage.getItem('theme');
+       const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+       
+       if (savedTheme === 'light' || (!savedTheme && !systemPrefersDark)) {
+           document.documentElement.setAttribute('data-theme', 'light');
+       }
+       
+       themeToggle.addEventListener('click', () => {
+           const currentTheme = document.documentElement.getAttribute('data-theme');
+           const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+           document.documentElement.setAttribute('data-theme', newTheme);
+           localStorage.setItem('theme', newTheme);
+       });
+   }
+   
+   })();
 
 </script>
 </body>
